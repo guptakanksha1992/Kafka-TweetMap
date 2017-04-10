@@ -148,15 +148,25 @@ def elastic_worker_sentiment_analysis():
     try:
 
         # Consume from Kafka
-        TIMEOUT = 60000
+        TIMEOUT = 1000
 
         # KafkaConsumer Object
         consumer = KafkaConsumer(topic2, bootstrap_servers=[host],
-                                 consumer_timeout_ms=TIMEOUT, value_serializer=lambda m: json.dumps(m).encode('ascii'))
+                                 consumer_timeout_ms=TIMEOUT,
+                                 value_deserializer=lambda k: json.loads(k.decode('ascii')))
 
         print "TIMEOUT set to:", str(TIMEOUT / 1000), "seconds"
 
-        print "This is my consumer: ", consumer
+        #print "This is my consumer: ", consumer
+
+        for message in consumer:
+            # message value and key are raw bytes -- decode if necessary!
+            # e.g., for unicode: `message.value.decode('utf-8')`
+            print ("%s:%d:%d: key=%s value=%s" % (message.topic, message.partition,
+                                                  message.offset, message.key,
+                                                  message.value))
+
+
         conn = boto.sns.connect_to_region('us-west-2', aws_access_key_id=myvars['aws_api_key'],
                                           aws_secret_access_key=myvars['aws_secret'])
         topic = 'arn:aws:sns:us-west-2:708464623468:tweet_sentiment'
