@@ -13,12 +13,16 @@ import json
 from tweepy import Stream
 from tweepy.streaming import StreamListener
 import random
+from kafka import KafkaProducer
+from kafka import KafkaConsumer
 
 
 consumerKey=myvars['twitter_consumer_key']
 consumerSecret=myvars['twitter_consumer_secret']
 accessToken=myvars['twitter_access_token']
 accessSecret=myvars['twitter_access_secret']
+TOPIC=myvars['TOPIC']
+HOST=myvars['HOST']
 
 #----------Sentiment Analysis methods------------------
 
@@ -118,28 +122,46 @@ def parse_data(data):
         tweet = json.dumps(formatted_tweet)
 
         #print 'Trying to publish to Queue the tweet', tweet
-        publishToQueue(tweet)
+        # Kafka here
+        # publishToQueue(tweet)
+        publishToKafka(tweet)
 
     except Exception, e:
-    	print("Failed to insert tweet into SQS")
+    	print("Failed to insert tweet into Kafka")
     	print str(e)
 
-def publishToQueue(tweet):
-    # Establishing Connection to SQS
-    conn = boto.sqs.connect_to_region("us-west-2", aws_access_key_id=myvars['aws_api_key'],
-                                      aws_secret_access_key=myvars['aws_secret'])
-    q = conn.get_queue('tweet_queue')   # Connecting to the SQS Queue named tweet_queue
+# def publishToQueue(tweet):
+#     # Establishing Connection to SQS
+#     conn = boto.sqs.connect_to_region("us-west-2", aws_access_key_id=myvars['aws_api_key'],
+#                                       aws_secret_access_key=myvars['aws_secret'])
+#     q = conn.get_queue('tweet_queue')   # Connecting to the SQS Queue named tweet_queue
+#
+#     m = Message()                       # Creating a message Object
+#
+#     m.set_body(tweet)
+#
+#     try:
+#         q.write(m)
+#         #print 'Added to Queue'
+#     except Exception,e:
+#         print 'Failed to publish to Queue'
+#         print str(e)
 
-    m = Message()                       # Creating a message Object
-     
-    m.set_body(tweet)
 
+def publishToKafka(tweet):
+    producer = KafkaProducer(bootstrap_servers=HOST)
     try:
-        q.write(m)
-        #print 'Added to Queue'
-    except Exception,e:
-        print 'Failed to publish to Queue'
-        print str(e)
+        json_data = json.loads(tweet)
+        if (json_data is not None and
+                    json_data['text'] is not None):
+            # Convert unicode to string
+            tweet2 = str(json_data['text'])
+            print tweet2
+            future = producer.send(TOPIC, tweet2)
+
+
+    except (KeyError, UnicodeDecodeError, Exception) as e:
+        pass
 
 
 def elastic_worker_sentiment_analysis():
@@ -149,25 +171,20 @@ def elastic_worker_sentiment_analysis():
     '''print 'Fetching from SQS and publishing to SNS'
                 print '---------------------------------------'''
     try:
-        conn = boto.sqs.connect_to_region("us-west-2", aws_access_key_id=myvars['aws_api_key'], aws_secret_access_key=myvars['aws_secret'])
-        q = conn.get_queue('tweet_queue')
 
-        # Storing the result set
-        rs = q.get_messages()
+        # Consume from Kafka
+        TIMEOUT = 60000
+        # KafkaConsumer Object
+        consumer = KafkaConsumer(TOPIC, bootstrap_servers=HOST,
+                                 consumer_timeout_ms=TIMEOUT)
 
-        # Extracting the message from resultset
-        m = rs[0]
+        print "TIMEOUT set to:", str(TIMEOUT / 1000), "seconds"
 
-        # Extracting tweet from message
-        tweet = m.get_body()
-
-        sentiment = tweet_sentiment_analysis(tweet)
-        '''print 'Sentiment processed from tweet_sentiment analysis for tweet'
-                                        print '----------------------------------------------------------'
-                                        print tweet
-                                        print '----------------------------------------------------------'
-                                        print sentiment
-                                        print '-------------------'''
+        # read messages and get tweet text
+        for message in consumer:
+            print message.value
+            tweet=message.value
+            sentiment = tweet_sentiment_analysis(tweet)
 
         # SNS Connection
 
