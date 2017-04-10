@@ -17,12 +17,13 @@ from kafka import KafkaProducer
 from kafka import KafkaConsumer
 
 
+
 consumerKey=myvars['twitter_consumer_key']
 consumerSecret=myvars['twitter_consumer_secret']
 accessToken=myvars['twitter_access_token']
 accessSecret=myvars['twitter_access_secret']
-TOPIC=myvars['TOPIC']
-HOST=myvars['HOST']
+topic2='test'
+host='localhost:9092'
 
 #----------Sentiment Analysis methods------------------
 
@@ -30,7 +31,7 @@ from TweetSentimentAnalysis import *
 
 #----------SQS & SNS Details---------------------------
 import boto.sns
-import boto.sqs
+#import boto.sqs
 from boto.sqs.message import Message
 
 #--------------------------------------------------------
@@ -40,9 +41,16 @@ REQUEST_LIMIT = 420
 
 
 class TweetListener(StreamListener):
+    producer = KafkaProducer(bootstrap_servers=[host], value_serializer=lambda m: json.dumps(m).encode('ascii'))
+
     def on_data(self, data):
         try:
-            parse_data(data)
+            json_data = parse_data(data)
+            print json_data, type(json_data)
+            #b = tweet.encode('utf-8')
+            # Saving to Kafka here
+            self.producer.send(topic2, json_data)
+
         except Exception, e:
             print("Parsing Error " + str(e))
         try:
@@ -112,93 +120,64 @@ def parse_data(data):
     author = json_data_file["user"]["name"]
     timestamp = json_data_file["created_at"]
     location_data = [final_longitude, final_latitude]
-    tweepy
+
     # Tweet ready (without sentiment analysis by this point) - sending to queue
    # print tweetId, location_data, tweet, author, timestamp
 
     try:
         # Format tweet into correct message format for SQS
         formatted_tweet = formatTweet(tweetId, location_data, tweet, author, timestamp)
-        tweet = json.dumps(formatted_tweet)
 
         #print 'Trying to publish to Queue the tweet', tweet
         # Kafka here
-        # publishToQueue(tweet)
-        publishToKafka(tweet)
+
+        return formatted_tweet
 
     except Exception, e:
     	print("Failed to insert tweet into Kafka")
     	print str(e)
-
-# def publishToQueue(tweet):
-#     # Establishing Connection to SQS
-#     conn = boto.sqs.connect_to_region("us-west-2", aws_access_key_id=myvars['aws_api_key'],
-#                                       aws_secret_access_key=myvars['aws_secret'])
-#     q = conn.get_queue('tweet_queue')   # Connecting to the SQS Queue named tweet_queue
-#
-#     m = Message()                       # Creating a message Object
-#
-#     m.set_body(tweet)
-#
-#     try:
-#         q.write(m)
-#         #print 'Added to Queue'
-#     except Exception,e:
-#         print 'Failed to publish to Queue'
-#         print str(e)
-
-
-def publishToKafka(tweet):
-    producer = KafkaProducer(bootstrap_servers=HOST)
-    try:
-        json_data = json.loads(tweet)
-        if (json_data is not None and
-                    json_data['text'] is not None):
-            # Convert unicode to string
-            tweet2 = str(json_data['text'])
-            print tweet2
-            future = producer.send(TOPIC, tweet2)
-
-
-    except (KeyError, UnicodeDecodeError, Exception) as e:
-        pass
+        return None
 
 
 def elastic_worker_sentiment_analysis():
     # This method acts as an Elastic BeanStalk worker
 
     # Receiving the message from SQS
-    '''print 'Fetching from SQS and publishing to SNS'
-                print '---------------------------------------'''
+    print 'Fetching from Kafka and publishing to SNS'
+    print '---------------------------------------'''
     try:
 
         # Consume from Kafka
         TIMEOUT = 60000
+
         # KafkaConsumer Object
-        consumer = KafkaConsumer(TOPIC, bootstrap_servers=HOST,
-                                 consumer_timeout_ms=TIMEOUT)
+        consumer = KafkaConsumer(topic2, bootstrap_servers=[host],
+                                 consumer_timeout_ms=TIMEOUT, value_serializer=lambda m: json.dumps(m).encode('ascii'))
 
         print "TIMEOUT set to:", str(TIMEOUT / 1000), "seconds"
+
+        print "This is my consumer: ", consumer
+        conn = boto.sns.connect_to_region('us-west-2', aws_access_key_id=myvars['aws_api_key'],
+                                          aws_secret_access_key=myvars['aws_secret'])
+        topic = 'arn:aws:sns:us-west-2:708464623468:tweet_sentiment'
 
         # read messages and get tweet text
         for message in consumer:
             print message.value
-            tweet=message.value
-            sentiment = tweet_sentiment_analysis(tweet)
+            tweet = message.value
+            text = tweet['message']
+            sentiment = tweet_sentiment_analysis(text)
 
-        # SNS Connection
+            # SNS Connection
 
-        conn = boto.sns.connect_to_region( 'us-west-2', aws_access_key_id=myvars['aws_api_key'], aws_secret_access_key=myvars['aws_secret'] )
-        topic = 'arn:aws:sns:us-west-2:708464623468:tweet_sentiment'
 
-        # Appending sentiment data to JSON Format of the message tweet
-        
-        message_json =  json.loads(tweet)
-        #print 'Message_json', message_json
-        message_json['sentiment'] = sentiment
+            # Appending sentiment data to JSON Format of the message tweet
 
-        # Publishing to SNS
-        conn.publish(topic=topic,message = json.dumps(message_json), message_structure=json)
+            #print 'Message_json', message_json
+            tweet['sentiment'] = sentiment
+
+            # Publishing to SNS
+            conn.publish(topic=topic,message = tweet, message_structure=json)
         #print "Published to SNS"
     except Exception, e:
         print 'Exception '+ str(e)
